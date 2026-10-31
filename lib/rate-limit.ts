@@ -41,8 +41,9 @@ function valkey() {
 }
 
 async function ready(client: RedisClient) {
-  if (client.status === "ready") return;
-  if (client.status === "wait" || client.status === "end") {
+  const status = client.status;
+  if (status === "ready") return;
+  if (status === "wait" || status === "end") {
     await client.connect().catch(() => undefined);
   }
   if (client.status === "ready") return;
