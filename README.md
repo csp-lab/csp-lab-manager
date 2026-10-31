@@ -2,15 +2,37 @@
 
 Self-hosted console for receiving, filtering, and inspecting Content Security Policy `report-uri` reports.
 
-Each endpoint is an app name with a slug and an API key. Browsers post reports to `POST /endpoint/<slug>?apiKey=<key>`. Admins and superadmins manage endpoints and users. Viewers only see endpoints they are assigned to.
+Each endpoint is an app name with a slug and an API key. Browsers post reports to `POST /endpoint/<slug>?apiKey=<key>`. Admins and superadmin manage endpoints and users. Viewers only see endpoints they are assigned to.
 
 ## Run
 
-1. Copy `.env.example` to `.env`. Set `BETTER_AUTH_SECRET` (32+ characters) and `SEED_ADMIN_PASSWORD` (8+ characters).
-2. `docker compose up -d` starts PostgreSQL and Valkey. The Next.js service in `compose.yaml` is commented out.
-3. `pnpm db:migrate`
-4. `pnpm db:seed` creates one superadmin when none exists. The username is `SEED_ADMIN_USERNAME` (default `superadmin`), stored lowercase.
-5. `pnpm dev`
+Copy `.env.example` to `.env` and fill it in before you start Compose. Both compose files require `.env` and will not start without it.
+
+The example already points `DATABASE_URL` at the `postgres` service and `REDIS_URL` at the `valkey` service. If you change a password, change it in both places: `DATABASE_URL` must match `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`, and `REDIS_URL` must match `VALKEY_PASSWORD`.
+
+Set the blank values:
+
+- `BETTER_AUTH_SECRET` — at least 32 characters
+- `SEED_ADMIN_PASSWORD` — at least 8 characters
+- `BETTER_AUTH_URL` — the URL you open in the browser (`http://localhost:3000` when the app is on the published port)
+
+`SEED_ADMIN_USERNAME` defaults to `superadmin` (3–20 letters, numbers, or underscores, stored lowercase).
+
+Pull the published image (`quay.io/csp-lab/csp-lab-manager`):
+
+```bash
+docker compose up -d
+```
+
+or build the image from this repo:
+
+```bash
+docker compose -f compose-dev.yaml up -d
+```
+
+Either command starts Postgres, Valkey, and the app. On startup the container rewrites `localhost` in `DATABASE_URL` to `postgres` and in `REDIS_URL` to `valkey`, applies migrations, and seeds one superadmin when none exists.
+
+For local development without the app container, `docker compose up -d postgres valkey`, point `DATABASE_URL` and `REDIS_URL` at `localhost` (the host cannot resolve the Compose service names), then `pnpm db:migrate`, `pnpm db:seed`, and `pnpm dev`.
 
 Sign in at `/admin/login`. `/` redirects to `/admin`, which redirects to `/admin/endpoints`.
 
@@ -38,6 +60,8 @@ The limiter allows 100 requests per 10 seconds per client IP and slug. It uses V
 
 | Command | What it does |
 | --- | --- |
+| `docker compose up -d` | Start Postgres, Valkey, and the published app image. Needs a filled-in `.env` |
+| `docker compose -f compose-dev.yaml up -d` | Same stack, building the app image from this repo |
 | `pnpm dev` | Next.js dev server |
 | `pnpm build` / `pnpm start` | Production build and server |
 | `pnpm lint` | ESLint |
