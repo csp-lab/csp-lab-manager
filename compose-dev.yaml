@@ -1,0 +1,67 @@
+# Copy .env.example to .env
+services:
+  # ---------------------------------------------------------------------------
+  # Web Application: Next.js 16 (CSP Lab Manager)
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: localhost/csp-lab-manager:latest
+    container_name: csp-lab-manager
+    restart: always
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    env_file:
+      - path: .env
+        required: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Database: PostgreSQL
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: csp-lab-postgres
+    restart: always
+    env_file:
+      - path: .env
+        required: true
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-csplab} -d $${POSTGRES_DB:-csplab_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Cache & Rate Limiter: Valkey
+  # ---------------------------------------------------------------------------
+  valkey:
+    image: valkey/valkey:9.0.7-alpine3.24
+    container_name: csp-lab-valkey
+    restart: always
+    command: valkey-server --appendonly no --requirepass ${VALKEY_PASSWORD:-valkey_password}
+    env_file:
+      - path: .env
+        required: true
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD:-valkey_password}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local
+  valkey_data:
+    driver: local

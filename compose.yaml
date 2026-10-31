@@ -1,4 +1,23 @@
+# Copy .env.example to .env
 services:
+  # ---------------------------------------------------------------------------
+  # Web Application: Next.js 16 (CSP Lab Manager)
+  # ---------------------------------------------------------------------------
+  app:
+    image: quay.io/csp-lab/csp-lab-manager:latest
+    container_name: csp-lab-manager
+    restart: always
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    env_file:
+      - path: .env
+        required: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+
   # ---------------------------------------------------------------------------
   # Database: PostgreSQL
   # ---------------------------------------------------------------------------
@@ -6,10 +25,9 @@ services:
     image: postgres:16-alpine
     container_name: csp-lab-postgres
     restart: always
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-csplab}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-csplab_password}
-      POSTGRES_DB: ${POSTGRES_DB:-csplab_db}
+    env_file:
+      - path: .env
+        required: true
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -28,8 +46,9 @@ services:
     container_name: csp-lab-valkey
     restart: always
     command: valkey-server --appendonly no --requirepass ${VALKEY_PASSWORD:-valkey_password}
-    ports:
-      - "${VALKEY_PORT:-6379}:6379"
+    env_file:
+      - path: .env
+        required: true
     volumes:
       - valkey_data:/data
     healthcheck:
@@ -37,42 +56,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  # ---------------------------------------------------------------------------
-  # Web Application: Next.js 16 (CSP Lab Manager)
-  # ---------------------------------------------------------------------------
-  # app:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   container_name: csp-lab-app
-  #   restart: always
-  #   ports:
-  #     - "${APP_PORT:-3000}:3000"
-  #   environment:
-  #     NODE_ENV: production
-  #     PORT: 3000
-      
-  #     # Database connection
-  #     DATABASE_URL: postgresql://${POSTGRES_USER:-csplab}:${POSTGRES_PASSWORD:-csplab_password}@postgres:5432/${POSTGRES_DB:-csplab_db}?schema=public
-      
-  #     REDIS_URL: redis://:${VALKEY_PASSWORD:-valkey_password}@valkey:6379
-      
-  #     # Better-Auth Configuration
-  #     BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-super-secret-auth-key-change-me}
-  #     BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
-      
-  #     # Application Configuration
-  #     NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     valkey:
-  #       condition: service_healthy
-
-# -----------------------------------------------------------------------------
-# Networks & Persistent Volumes
-# -----------------------------------------------------------------------------
 
 volumes:
   postgres_data:
