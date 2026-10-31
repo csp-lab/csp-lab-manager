@@ -1,67 +1,49 @@
-# PLAN.md: CSP Lab Manager Architecture & Implementation Specification
+# CSP Lab Manager
 
-## 1. Executive Summary & Tech Stack
+Self-hosted console for receiving, parsing, filtering, and inspecting Content Security Policy violation reports (`report-uri`). This document describes the app as it runs now.
 
-**CSP Lab Manager** is a self-hosted dashboard and ingestion platform for receiving, parsing, filtering, and analyzing Content Security Policy (CSP) violation reports (`report-uri`).
+## 1. Stack
 
-### Technical Core
+* **Framework:** Next.js 16 (App Router, `proxy.ts`, Server Actions). `cacheComponents` and `partialPrefetching` are on. `/` redirects to `/admin`.
+* **Package manager:** `pnpm`
+* **Authentication:** Better Auth with the username plugin, credential passwords, and the HTTP-only session cookie from `nextCookies`.
+* **Database:** PostgreSQL 16 and Prisma. Report totals live on the endpoint row and move in the same transaction as report inserts and deletes.
+* **Data fetching:** Server Components for the first paint. TanStack Query v5 polls the report explorer through the `queryReports` Server Action.
+* **Validation:** Zod 4 for forms, report queries, and CSP bodies.
+* **Rate limiting:** Valkey sliding window through `ioredis` when `REDIS_URL` is set. Otherwise an in-process window.
+* **UI:** Tailwind CSS v4, Radix dialog and select, Sonner toasts, Lucide icons. Inter and JetBrains Mono.
 
-* **Framework:** Next.js 16 (App Router with `proxy.ts` / Server Actions)
-* **Package Manager:** `pnpm`
-* **Authentication:** `Better-Auth` with HTTP-only session management & role-based middleware/proxy access control.
-* **Database & ORM:** PostgreSQL + Prisma ORM
-* **State Management & Data Fetching:** TanStack Query v5 (React Query)
-* **Validation & Schemas:** Zod (for forms, API payload parsing, and CSP report validation)
-* **Rate Limiting:** Valkey-backed sliding window rate limiter (`REDIS_URL`, `ioredis`)
-* **UI Components & Styling:** Tailwind CSS v4 + `shadcn/ui` (Radix UI primitives)
-* **Icons:** Lucide React
+Local Compose runs Postgres and Valkey. The app container in `compose.yaml` is commented out; the app runs with `pnpm dev` or `pnpm start`.
 
----
-
-## 2. System Architecture & Routing Structure
+## 2. Routes
 
 ```
-├── app/
-│   ├── (auth)/
-│   │   └── admin/
-│   │       └── login/
-│   │           └── page.tsx            # Admin Login Form (Zod validated)
-│   ├── admin/
-│   │   ├── layout.tsx                  # Sidebar & Authenticated Shell Layout
-│   │   ├── endpoints/
-│   │   │   ├── page.tsx                # Endpoint Overview Grid/List with 99+ Badges
-│   │   │   ├── new/
-│   │   │   │   └── page.tsx            # Create Endpoint Side Panel/View
-│   │   │   └── [app-name-slug]/
-│   │   │       └── page.tsx            # Detailed CSP Report Explorer (Grafana-style filters/auto-refresh)
-│   │   └── users/
-│   │       ├── page.tsx                # User Management View (Role Badges, Actions)
-│   │       └── new/
-│   │           └── page.tsx            # Create User View
-│   ├── api/
-│   │   └── auth/
-│   │       └── [...all]/route.tsx      # Better-Auth Handler
-│   ├── endpoint/
-│   │   └── [app-name-slug]/
-│   │       └── route.ts                # Public CSP Ingestion Endpoint
-│   └── proxy.ts                        # Route protection proxy layer for /admin/*
-
+proxy.ts                                 # protects /admin and /admin/:path*
+app/
+├── layout.tsx
+├── admin/
+│   ├── page.tsx                         # redirect → /admin/endpoints
+│   ├── login/page.tsx
+│   └── (console)/
+│       ├── layout.tsx                   # sidebar shell, session required
+│       ├── endpoints/page.tsx
+│       ├── endpoints/new/page.tsx
+│       ├── endpoints/[app-name-slug]/page.tsx
+│       ├── users/page.tsx
+│       └── users/new/page.tsx
+├── api/
+│   ├── auth/[...all]/route.ts
+│   └── health/route.ts                  # GET { status: "ok" }
+└── endpoint/[app-name-slug]/route.ts    # public POST ingest
 ```
 
----
+`proxy.ts` sends anonymous visitors to `/admin/login?next=<path>`, sends a signed-in visitor away from the login page, and bounces viewers off `/admin/users` and `/admin/endpoints/new`. Server Actions call `requireUser()` and check the role again.
 
-## 3. Database Schema (`prisma/schema.prisma`)
+## 3. Database
+
+Better Auth owns `users`, `sessions`, `accounts`, and `verifications`. Passwords live on `accounts.password`, not on `users`. A provisioned user gets a synthetic email `{username}@users.csp.local`, `emailVerified: true`, and a lowercased username. `users.role` is not writable from the auth client (`input: false`).
 
 ```prisma
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-generator client {
-  provider = "prisma-client-js"
-}
-
 enum Role {
   SUPERADMIN
   ADMIN
@@ -69,51 +51,21 @@ enum Role {
 }
 
 model User {
-  id            String           @id @default(cuid())
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
   firstName     String
   lastName      String
-  username      String           @unique
-  passwordHash  String
-  role          Role             @default(VIEWER)
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  
-  // Better-Auth Relations
+  username      String?   @unique
+  role          Role      @default(VIEWER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
   sessions      Session[]
   accounts      Account[]
-  
-  // RBAC Relations
   assignments   EndpointAccess[]
-
   @@map("users")
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  userId       String
-  token        String   @unique
-  expiresAt    DateTime
-  ipAddress    String?
-  userAgent    String?
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("sessions")
-}
-
-model Account {
-  id                    String    @id @default(cuid())
-  userId                String
-  accountId             String
-  providerId            String
-  accessToken           String?
-  refreshToken          String?
-  accessTokenExpiresAt  DateTime?
-  refreshTokenExpiresAt DateTime?
-  scope                 String?
-  idToken               String?
-  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("accounts")
 }
 
 model Endpoint {
@@ -121,14 +73,12 @@ model Endpoint {
   appName      String
   appNameSlug  String           @unique
   apiKey       String           @unique
+  reportCount  Int              @default(0)
+  lastReportAt DateTime?
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
-
   reports      Report[]
   accessList   EndpointAccess[]
-
-  @@index([appNameSlug])
-  @@index([apiKey])
   @@map("endpoints")
 }
 
@@ -138,227 +88,94 @@ model EndpointAccess {
   endpointId String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   endpoint   Endpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
-
   @@unique([userId, endpointId])
+  @@index([endpointId])
   @@map("endpoint_access")
 }
 
 model Report {
-  id                String   @id @default(cuid())
-  endpointId        String
-  documentUri       String
-  referrer          String?
-  violatedDirective String
+  id                 String   @id @default(cuid())
+  endpointId         String
+  documentUri        String
+  referrer           String?
+  violatedDirective  String
   effectiveDirective String?
-  originalPolicy    String?  @db.Text
-  disposition       String   // "enforce" | "report"
-  blockedUri        String
-  blockedDomain     String   // Extracted domain name without path/query string
-  lineNumber        Int?
-  columnNumber      Int?
-  sourceFile        String?
-  statusCode        Int?
-  scriptSample      String?  @db.Text
-  rawJson           Json     // Fully serialized original JSON report
-  createdAt         DateTime @default(now())
-
-  endpoint          Endpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  originalPolicy     String?  @db.Text
+  disposition        String
+  blockedUri         String
+  blockedDomain      String
+  lineNumber         Int?
+  columnNumber       Int?
+  sourceFile         String?
+  statusCode         Int?
+  scriptSample       String?  @db.Text
+  rawJson            Json
+  createdAt          DateTime @default(now())
+  endpoint           Endpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
 
   @@index([endpointId, createdAt(sort: Desc)])
-  @@index([endpointId, violatedDirective])
-  @@index([endpointId, blockedDomain])
-  @@index([endpointId, disposition])
+  @@index([endpointId, violatedDirective, createdAt(sort: Desc)])
+  @@index([endpointId, blockedDomain, createdAt(sort: Desc)])
+  @@index([endpointId, disposition, createdAt(sort: Desc)])
   @@map("reports")
 }
-
 ```
 
----
+`Session`, `Account`, and `Verification` follow the Better Auth Prisma adapter (session token, account password, verification identifier). See `prisma/schema.prisma`.
 
-## 4. Zod Schemas & Validation Logic (`lib/validations/`)
+`reportCount` and `lastReportAt` update inside the report write. Clears delete reports in batches of 1000 and rewind the counter from the rows that remain.
 
-### 4.1 CSP Report Payload Schema
+## 4. Validation
 
-```typescript
-import { z } from "zod";
+CSP ingest (`lib/validations/csp.ts`) expects `{ "csp-report": { ... } }`. `document-uri` and `violated-directive` are non-empty strings. `blocked-uri` may be empty. `disposition` defaults to `enforce` and is stored as given. Optional fields match the usual report-uri set: referrer, effective directive, original policy, line, column, source file, status code, script sample.
 
-export const cspReportPayloadSchema = z.object({
-  "csp-report": z.object({
-    "document-uri": z.string().url(),
-    "referrer": z.string().optional().default(""),
-    "violated-directive": z.string(),
-    "effective-directive": z.string().optional(),
-    "original-policy": z.string().optional(),
-    "disposition": z.string().optional().default("enforce"),
-    "blocked-uri": z.string(),
-    "line-number": z.number().int().optional(),
-    "column-number": z.number().int().optional(),
-    "source-file": z.string().optional(),
-    "status-code": z.number().int().optional(),
-    "script-sample": z.string().optional().default("")
-  })
-});
+Forms (`lib/validations/forms.ts`):
 
-export type CSPReportPayload = z.infer<typeof cspReportPayloadSchema>;
+* **Endpoint.** App name is 2–50 characters, letters, numbers, and spaces. The slug is `trim().toLowerCase()` with spaces turned into hyphens. The API key is at least 16 characters. The create form generates a URL-safe key from 24 random bytes; regenerate on the detail page replaces it server-side.
+* **Login.** Username at least 3 characters. The form schema asks for 6; Better Auth and the seed require 8.
+* **Create user.** First and last name, username 3–20 (`[a-zA-Z0-9_]+`, stored lowercase), password at least 8, role `ADMIN` or `VIEWER`.
+* **Report query.** Optional from, to, directive, and domain. Disposition is `enforce` or `report`. Sort is `newest` (default), `oldest`, or `domain`. `unique` is optional. Limit is 1–1000, default 20.
 
-```
+## 5. Ingest
 
-### 4.2 Application Forms Schemas
+`POST /endpoint/<slug>?apiKey=<key>`
 
-```typescript
-// App Name Slug & Unique Key Validation
-export const createEndpointSchema = z.object({
-  appName: z
-    .string()
-    .min(2, "App name must be at least 2 characters")
-    .max(50, "App name cannot exceed 50 characters")
-    .regex(/^[a-zA-Z0-9\s]+$/, "App name can only contain letters, numbers, and spaces"),
-  apiKey: z.string().min(16, "API Key must be at least 16 characters long")
-});
+1. Content type must be `application/csp-report` or `application/json`, ignoring parameters. Otherwise `415`.
+2. Sliding window of 100 requests / 10 seconds, keyed by client IP and slug. IP is the first `x-forwarded-for` hop, else `x-real-ip`, else `unknown`. Valkey key prefix is `csp-ingest:`. Over the limit returns `429` with `Retry-After: 10`. If `REDIS_URL` is set and Valkey cannot be reached, the route returns `503` and does not fall back to memory.
+3. Missing slug or a key that fails a SHA-256 timing-safe compare returns `401` with the same body, so a missing endpoint and a bad key look the same.
+4. Invalid JSON or a body that fails the CSP schema returns `400`.
+5. `blockedDomain` is the hostname. Bare tokens (`inline`, `eval`, `self`, `none`, `wasm-eval`, `about`) stay as-is. `data:` and `blob:` become `data` and `blob`. An empty URI becomes `unknown`. Anything else is kept and cut at 253 characters.
+6. The report row and the endpoint counter commit together. Success is `204` with an empty body. `rawJson` stores the original body.
 
-// Admin Login Schema
-export const loginSchema = z.object({
-  username: z.string().min(3, "Username must be at least 3 characters"),
-  password: z.string().min(6, "Password must be at least 6 characters")
-});
+## 6. Access
 
-// User Creation Schema
-export const createUserSchema = z.object({
-  firstName: z.string().min(1, "First name is required").regex(/^[a-zA-Z\s-]+$/),
-  lastName: z.string().min(1, "Last name is required").regex(/^[a-zA-Z\s-]+$/),
-  username: z.string().min(3).max(20).regex(/^[a-zA-Z0-9_]+$/),
-  password: z.string().min(8, "Password must be at least 8 characters"),
-  role: z.enum(["ADMIN", "VIEWER"])
-});
-
-```
-
----
-
-## 5. Public CSP Ingestion & Rate Limiting Strategy
-
-### Endpoint URL Format
-
-`POST https://<hosted-app-name>/endpoint/<app-name-slug>?apiKey=<api-key>`
-
-### Logic Flow (`app/endpoint/[app-name-slug]/route.ts`):
-
-1. **Content-Type Handling:** Accepts `application/csp-report` and `application/json`.
-2. **Rate Limiting:** Sliding window in Valkey indexed by `ip + app-name-slug` (e.g., max 100 requests / 10 seconds).
-* *Returns `429 Too Many Requests` when limits are exceeded.*
-
-
-3. **Endpoint Verification:** Verify `app-name-slug` and `apiKey` parameter against PostgreSQL database.
-4. **Domain Normalization:** Strip request URI from `blocked-uri` using `new URL(blockedUri).hostname` to populate the `blockedDomain` column for indexing and fast filtering.
-5. **Atomic Insertion:** Persist the normalized report row into `Report`.
-
----
-
-## 6. Access Control & Authorization Matrix (RBAC)
-
-Route protection for `/admin/*` is enforced through Next.js proxy route middleware (`proxy.ts`), evaluating session status and user roles stored via Better-Auth.
-
-| Permission / Action | SUPERADMIN | ADMIN | VIEWER |
+| Action | SUPERADMIN | ADMIN | VIEWER |
 | --- | --- | --- | --- |
-| View assigned endpoints (`/admin/endpoints`) | ✅ | ✅ | ✅ |
-| View report details (`/admin/endpoints/[slug]`) | ✅ | ✅ | ✅ (If assigned) |
-| Create endpoint (`/admin/endpoints/new`) | ✅ | ✅ | ❌ |
-| Regenerate endpoint API Key | ✅ | ✅ | ❌ |
-| Delete endpoint & clear reports | ✅ | ✅ | ❌ |
-| Assign user access to endpoint | ✅ | ✅ | ❌ |
-| View User Management list (`/admin/users`) | ✅ | ✅ | ❌ |
-| Create new User | ✅ | ✅ | ❌ |
-| Delete User | ✅ | ✅ | ❌ |
-| Edit User Role | ✅ | ❌ | ❌ |
-| Assign `ADMIN` role on creation | ✅ | ❌ | ❌ |
+| View assigned endpoints and their reports | all endpoints | all endpoints | assigned only |
+| See the API key and report URL | yes | yes | no |
+| Create an endpoint | yes | yes | no |
+| Regenerate a key, clear reports, delete an endpoint | yes | yes | no |
+| Remove one report, or a unique group | yes | yes | no |
+| Assign viewers to an endpoint | yes | yes | no |
+| Open `/admin/users` and create a user | yes | yes | no |
+| Create or assign the `ADMIN` role | yes | no | no |
+| Change a user's role | yes | no | no |
+| Delete a user | yes, not self | yes, not self or a superadmin | no |
 
----
+Seed creates the only superadmin. Provisioning refuses a second one. The role control cannot promote someone to superadmin, and the current superadmin cannot demote or delete themselves. Clearing reports and deleting an endpoint require the slug typed into the confirm dialog.
 
-## 7. Frontend Features & UX Specifications
+Creating an endpoint assigns the creator. Saving members always keeps every admin and superadmin on the access list. Viewers are the people who can be checked or unchecked. A viewer with no assignment sees an empty endpoint list, and a direct visit to someone else's slug is a 404.
 
-### 7.1 Sidebar Navigation
+## 7. Console
 
-* Top header/brand: **CSP Lab Manager**
-* "+ Create Endpoint" button styled like Google Drive side panel (directs to `/admin/endpoints/new`).
-* Nav Items:
-* 📊 **Endpoints** (`/admin/endpoints`)
-* 👥 **Users** (`/admin/users`) — *Visible only to ADMIN & SUPERADMIN*.
+Sidebar brand links to `/admin/endpoints`. **Create Endpoint** shows for admins and superadmins. **Users** shows for the same roles. The footer shows the signed-in name, username, and role, and signs out through Better Auth.
 
+**Endpoints** is a card grid. Each card shows the app name, slug, and `reportCount`, displayed as `99+` past 99. A live dot means `lastReportAt` is within the last hour. Sort toggles name A–Z / Z–A and most / fewest reports.
 
+**Report explorer** loads `now-15m` through `now`. From and To accept that relative form (`now`, then `+` or `-` with `s`, `m`, `h`, `d`, `w`, `M`, `y`) or an absolute timestamp, including the datetime picker. Presets are 15m, 1h, 24h, and 7d. Directive and blocked-domain menus list values seen inside the time window. Disposition is all, `enforce`, or `report`. **Unique only** picks one row per `documentUri`, `violatedDirective`, `blockedUri`, and `disposition`; removing that row deletes the whole group. Sort is newest, oldest, or domain A–Z. The limit defaults to 20. Auto-refresh choices are Off, 5s, 10s, 30s, 1m, 5m, 15m, 30m, and 1h. Each row shows the blocked URI, directive, disposition, and `YYYY-MM-DDTHH:MM:SSZ`. Opening a row shows `rawJson` in the JSON tree.
 
-### 7.2 Endpoints View (`/admin/endpoints`)
+**Users** lists name, username, role, and created date. A superadmin can switch a non-self user between admin and viewer. Delete confirms in a dialog.
 
-* Displays grid/table of endpoints.
-* **Badge Request Counter:** Shows total aggregated reports per endpoint. Capped visually at **`99+`** (or actual number if below 99).
-* Clicking row navigates to `/admin/endpoints/[app-name-slug]`.
+## 8. What is in place
 
-### 7.3 Detailed Endpoint View (`/admin/endpoints/[app-name-slug]`)
-
-* **Header Bar Controls:**
-* Auto-Refresh Selector: Dropdown with `Off` (default), `Auto (5s)`, `5s`, `10s`, `15s`, `30s`, `1m`, `1h`. Uses TanStack Query `refetchInterval`.
-* Manual Refresh Icon button.
-* Time Range Filter (Grafana-style: `From` and `To` datetime pickers / quick selectors).
-
-
-* **Filters:**
-* Violated Directive filter dropdown.
-* Blocked Domain filter dropdown (shows extracted hostname list).
-* Disposition filter: `enforce` | `report`.
-* Alphabetical domain sorting & Time sorting (Newest/Oldest).
-
-
-* **Report List Items:**
-* Title: `blockedUri`
-* Badges: `violatedDirective` badge, `disposition` badge.
-* Timestamp: Right-aligned ISO date/time in `YYYY-MM-DDTHH:MM:SSZ`.
-* Accordion interaction: Clicking row expands a visual JSON Tree Serializer (e.g. `react-json-view` or formatted custom serializer) displaying the full structured CSP report.
-
-
-* **Danger Zone:**
-* **Clear All Reports:** Button triggers a modal warning: *"All report data for this endpoint will be lost forever."* Requires explicit typed confirmation or click confirmation to execute deletion.
-
-
-
----
-
-## 8. Development Step-by-Step Execution Checklist
-
-* [ ] **Step 1: Project Setup**
-* Initialize Next.js 16 app with `pnpm create next-app` (App Router, Tailwind CSS v4, TypeScript).
-* Install dependencies: `@prisma/client`, `prisma`, `better-auth`, `@tanstack/react-query`, `zod`, `ioredis`, `lucide-react`.
-
-
-* [ ] **Step 2: Database & Auth Setup**
-* Configure Prisma schema with `User`, `Session`, `Account`, `Endpoint`, `EndpointAccess`, and `Report` models.
-* Run initial Prisma migration (`pnpm prisma migrate dev`).
-* Integrate Better-Auth instance with Prisma adapter. Create auth routes under `app/api/auth/[...all]/route.ts`.
-
-
-* [ ] **Step 3: Route Protection Proxy**
-* Create `proxy.ts` / auth check proxy to validate `/admin/*` routes. Redirect unauthenticated users to `/admin/login`.
-
-
-* [ ] **Step 4: Public Ingestion Endpoint & Rate Limiter**
-* Build `app/endpoint/[app-name-slug]/route.ts`.
-* Implement the Valkey sliding-window rate limit handler.
-* Add Zod validation for CSP Report body and URL params.
-* Extract domain name and store raw JSON + atomic report fields.
-
-
-* [ ] **Step 5: Admin UI & TanStack Query State Layer**
-* Build layout shell with sidebar and Google Drive style "+ Create Endpoint" button.
-* Build `/admin/endpoints` overview with atomic count aggregation queries and `99+` request badge formatting.
-* Build `/admin/endpoints/new` form with auto-slug generation (`appName.toLowerCase().replace(/\s+/g, '-')`) and Zod validation.
-
-
-* [ ] **Step 6: CSP Report Explorer View**
-* Build Grafana-style top bar (Auto-refresh selector via TanStack Query interval + Datetime range picker).
-* Build directive, disposition, and blocked domain filter menus.
-* Implement accordion list layout with formatted date display (`YYYY-MM-DDTHH:MM:SSZ`).
-* Integrate JSON Serializer component for accordion expander.
-* Add "Clear All Reports" action modal.
-
-
-* [ ] **Step 7: User Management & RBAC Integration**
-* Build `/admin/users` & `/admin/users/new`.
-* Enforce role-based UI conditional rendering and API guardrails for `SUPERADMIN`, `ADMIN`, and `VIEWER`.
+The console, ingest path, rate limiter, and role checks above are implemented. Tests cover report-field helpers and the in-memory rate-limit window (`pnpm test`).
