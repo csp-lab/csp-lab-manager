@@ -1,36 +1,17 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CSP Lab Manager
 
-## Getting Started
+Self-hosted console for CSP `report-uri` ingestion.
 
-First, run the development server:
+## Run
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+1. Copy `.env.example` to `.env`. Set `BETTER_AUTH_SECRET` (32+ characters) and `SEED_ADMIN_PASSWORD` (8+ characters).
+2. `docker compose up -d`
+3. `pnpm db:migrate`
+4. `pnpm db:seed`
+5. `pnpm dev`
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Sign in at `/admin/login` with `SEED_ADMIN_USERNAME` / `SEED_ADMIN_PASSWORD`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Ingest with `POST /endpoint/<slug>?apiKey=<key>` and `Content-Type: application/csp-report` or `application/json`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Rate limit uses Valkey through `REDIS_URL`. With no `REDIS_URL`, the limit stays in process memory, which only holds for one app process. On ECS, set `connection_limit` on `DATABASE_URL` so the task count times that limit stays under `max_connections`, and point every task at the same `REDIS_URL`.

@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPERADMIN
+  ADMIN
+  VIEWER
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  firstName     String
+  lastName      String
+  username      String?   @unique
+  role          Role      @default(VIEWER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions    Session[]
+  accounts    Account[]
+  assignments EndpointAccess[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?   @db.Text
+  refreshToken          String?   @db.Text
+  idToken               String?   @db.Text
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?   @db.Text
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+model Endpoint {
+  id          String           @id @default(cuid())
+  appName      String
+  appNameSlug  String           @unique
+  apiKey       String           @unique
+  reportCount  Int              @default(0)
+  lastReportAt DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  reports      Report[]
+  accessList   EndpointAccess[]
+
+  @@map("endpoints")
+}
+
+model EndpointAccess {
+  id         String   @id @default(cuid())
+  userId     String
+  endpointId String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint   Endpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, endpointId])
+  @@index([endpointId])
+  @@map("endpoint_access")
+}
+
+model Report {
+  id                  String   @id @default(cuid())
+  endpointId          String
+  documentUri         String
+  referrer            String?
+  violatedDirective   String
+  effectiveDirective  String?
+  originalPolicy      String?  @db.Text
+  disposition         String
+  blockedUri          String
+  blockedDomain       String
+  lineNumber          Int?
+  columnNumber        Int?
+  sourceFile          String?
+  statusCode          Int?
+  scriptSample        String?  @db.Text
+  rawJson             Json
+  createdAt           DateTime @default(now())
+  endpoint            Endpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId, createdAt(sort: Desc)])
+  @@index([endpointId, violatedDirective, createdAt(sort: Desc)])
+  @@index([endpointId, blockedDomain, createdAt(sort: Desc)])
+  @@index([endpointId, disposition, createdAt(sort: Desc)])
+  @@map("reports")
+}
