@@ -5,3 +5,9 @@ allowBuilds:
   esbuild: true
   sharp: false
   unrs-resolver: false
+minimumReleaseAgeExclude:
+  - deepmerge-ts@8.0.0
+  - minimatch@11.0.1
+overrides:
+  deepmerge-ts@<8.0.0: ^8.0.0
+  minimatch@<11.0.1: ^11.0.1
