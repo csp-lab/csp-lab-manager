@@ -151,16 +151,15 @@ export function EndpointControls({
   origin: string;
 }) {
   const router = useRouter();
-  const [key, setKey] = useState(apiKey);
   const [error, setError] = useState("");
   const [mode, setMode] = useState<"clear" | "delete" | null>(null);
   const [pending, setPending] = useState(false);
 
-  if (!key) return null;
+  if (!apiKey) return null;
 
   async function copyKey() {
     try {
-      await navigator.clipboard.writeText(`${origin}/endpoint/${slug}?apiKey=${key}`);
+      await navigator.clipboard.writeText(`${origin}/endpoint/${slug}?apiKey=${apiKey}`);
       toast.success("Copied report URL");
     } catch {
       toast.error("Could not copy the report URL");
@@ -176,8 +175,8 @@ export function EndpointControls({
       toast.error(message);
       return;
     }
-    setKey(result.apiKey);
     toast.success("Regenerated API key");
+    router.refresh();
   }
 
   async function confirmDanger() {
@@ -201,7 +200,7 @@ export function EndpointControls({
       <section className="rounded-md bg-terminal p-5 text-code">
         <p className="font-mono text-[11px] tracking-wide text-directive">report-uri</p>
         <p className="mt-2 break-all font-mono text-[13px]">
-          {origin}/endpoint/{slug}?apiKey={key}
+          {origin}/endpoint/{slug}?apiKey={apiKey}
         </p>
         <div className="mt-4 flex gap-2">
           <button type="button" onClick={copyKey} className="rounded bg-white/10 px-3 py-2 font-mono text-[13px]">

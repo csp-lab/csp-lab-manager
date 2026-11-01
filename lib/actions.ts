@@ -40,7 +40,8 @@ export async function createEndpoint(input: { appName: string; apiKey: string })
     throw error;
   }
   revalidatePath("/admin/endpoints");
-  return { ok: true, slug: appNameSlug };
+  revalidatePath(`/admin/endpoints/${appNameSlug}`);
+  return { ok: true, slug: appNameSlug, apiKey: parsed.data.apiKey };
 }
 
 export async function regenerateApiKey(slug: string): Promise<ActionResult> {

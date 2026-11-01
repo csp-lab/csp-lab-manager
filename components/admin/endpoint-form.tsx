@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
@@ -8,28 +8,39 @@ import { createEndpoint } from "@/lib/actions";
 import { createApiKey } from "@/lib/api-key";
 import { slugifyAppName } from "@/lib/report-fields";
 
-export function EndpointForm({ apiKey }: { apiKey: string }) {
+export function EndpointForm() {
   const router = useRouter();
   const [appName, setAppName] = useState("");
-  const [key, setKey] = useState(apiKey);
+  const [key, setKey] = useState("");
+  const [keyLocked, setKeyLocked] = useState(true);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [stamp, setStamp] = useState(0);
+  const keyRef = useRef<HTMLInputElement>(null);
   const slug = useMemo(() => slugifyAppName(appName), [appName]);
 
   function clearFields(nextKey: string) {
     setAppName("");
     setKey(nextKey);
+    setKeyLocked(true);
     setError("");
     setStamp((n) => n + 1);
   }
 
+  // Generated after mount so a prerender cannot freeze one key into the page.
   useEffect(() => {
-    clearFields(apiKey);
-  }, [apiKey]);
+    setKey((current) => current || createApiKey());
+  }, []);
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
+    const visible = keyRef.current?.value ?? key;
+    if (visible !== key) {
+      if (keyRef.current) keyRef.current.value = key;
+      setError("The browser replaced the API key. The generated key is restored.");
+      toast.error("The browser replaced the API key. Create the endpoint again.");
+      return;
+    }
     setPending(true);
     setError("");
     const name = appName.trim();
@@ -64,10 +75,18 @@ export function EndpointForm({ apiKey }: { apiKey: string }) {
         API key
         <span className="mt-1 flex gap-2">
           <input
+            ref={keyRef}
             key={`key-${stamp}`}
+            name={`api-key-${stamp}`}
             value={key}
             onChange={(event) => setKey(event.target.value)}
-            autoComplete="off"
+            onFocus={() => setKeyLocked(false)}
+            autoComplete="new-password"
+            autoCorrect="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            readOnly={keyLocked || key.length === 0}
             className="h-9 min-w-0 flex-1 rounded border border-line bg-white px-3 font-mono text-[13px] outline-none focus:border-terminal"
             minLength={16}
             required
@@ -85,7 +104,7 @@ export function EndpointForm({ apiKey }: { apiKey: string }) {
       {error ? <p className="mt-3 text-[13px] text-brand">{error}</p> : null}
       <button
         type="submit"
-        disabled={pending}
+        disabled={pending || key.length < 16}
         className="mt-5 rounded bg-terminal px-4 py-2 font-mono text-[13px] text-white disabled:opacity-50"
       >
         Create endpoint
